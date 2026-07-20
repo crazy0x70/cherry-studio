@@ -4,7 +4,7 @@ import { type OpenTabOptions, TabsContext, type TabsContextValue } from '@render
 import { ipcApi, useIpcOn } from '@renderer/ipc'
 import { TabLruManager } from '@renderer/services/TabLruManager'
 import { getDefaultRouteTitle, isPageTitledRoute, isTopLevelRoute } from '@renderer/utils/routeTitle'
-import { resolveSidebarAppTabEntryUrl } from '@renderer/utils/sidebar'
+import { getSidebarApp, resolveSidebarActiveItem, resolveSidebarAppTabEntryUrl } from '@renderer/utils/sidebar'
 import type { Tab, TabSavedState } from '@shared/data/cache/cacheValueTypes'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -105,6 +105,19 @@ function isSettingsRouteTab(tab: Tab): boolean {
   return tab.type === 'route' && tab.url.startsWith('/settings')
 }
 
+/**
+ * The default tab normally opens `/app/chat`; when a last-active module was recorded and
+ * still resolves to a live sidebar module, open that instead. This only restores the
+ * module level — which topic/session shows inside it is the pages' own last-used logic.
+ */
+function withLastActiveModuleUrl(tab: Tab, lastActiveModuleUrl: string | null): Tab {
+  // Identity check: restore only applies when the caller relied on the default
+  // parameter — an explicitly passed initialDefaultTab must never be overridden.
+  if (tab !== DEFAULT_TAB) return tab
+  if (!lastActiveModuleUrl || !resolveSidebarActiveItem(lastActiveModuleUrl)) return tab
+  return { ...tab, url: lastActiveModuleUrl }
+}
+
 type TabsProviderProps = {
   children: ReactNode
   initialDefaultTab?: Tab | null
@@ -147,8 +160,14 @@ export function TabsProvider({
     })
   }, [includePinnedTabs, migratedPinnedTabs, restoredPinnedTabs, setPinnedTabs])
 
-  // Normal tabs - in-memory storage (cleared on restart)
-  const [normalTabs, setNormalTabs] = useState<Tab[]>(() => (initialDefaultTab ? [initialDefaultTab] : []))
+  // Module memory: base route of the sidebar module last active in the main window.
+  const [lastActiveModuleUrl, setLastActiveModuleUrl] = usePersistCache('ui.tab.last_active_module_url')
+
+  // Normal tabs - in-memory storage (cleared on restart). The default tab reopens the
+  // last-active module instead of the hard-coded chat route when one was recorded.
+  const [normalTabs, setNormalTabs] = useState<Tab[]>(() =>
+    initialDefaultTab ? [withLastActiveModuleUrl(initialDefaultTab, lastActiveModuleUrl)] : []
+  )
 
   // Active tab ID - in-memory storage
   const [activeTabId, setActiveTabIdState] = useState<string>(() => initialDefaultTab?.id ?? '')
@@ -181,6 +200,22 @@ export function TabsProvider({
     const currentPinnedTabs = includePinnedTabs ? availablePinnedTabs : []
     return [...currentPinnedTabs.map(withLocalizedRouteTitle), ...normalTabs.map(withLocalizedRouteTitle)]
   }, [availablePinnedTabs, includePinnedTabs, normalTabs, i18n.language])
+
+  // Record the active module whenever the active tab shows a sidebar-module route (module
+  // switches mutate the active tab's url in place, so track the url, not just the id).
+  // Only the main window records it — a detached sub-window must not clobber the shared
+  // value (same rule as `ui.tab.pinned_tabs`). Settings and mini-app instance routes are
+  // not sidebar modules and leave the recorded value untouched.
+  const activeTabUrl = tabs.find((t) => t.id === activeTabId)?.url
+  useEffect(() => {
+    if (!includePinnedTabs || !activeTabUrl) return
+    const moduleId = resolveSidebarActiveItem(activeTabUrl)
+    if (!moduleId) return
+    const moduleRoute = getSidebarApp(moduleId)?.routePrefix
+    if (moduleRoute && moduleRoute !== lastActiveModuleUrl) {
+      setLastActiveModuleUrl(moduleRoute)
+    }
+  }, [activeTabUrl, includePinnedTabs, lastActiveModuleUrl, setLastActiveModuleUrl])
 
   const updateTab = useCallback(
     (id: string, updates: Partial<Tab>) => {

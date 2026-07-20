@@ -56,6 +56,9 @@ const PINNED_CODE_TAB: Tab = {
 let pinnedTabsValue: Tab[] = [PINNED_FILES_TAB]
 const setPinnedTabsMock = vi.fn()
 
+let lastActiveModuleUrlValue: string | null = null
+const setLastActiveModuleUrlMock = vi.fn()
+
 vi.mock('@logger', () => ({
   loggerService: {
     withContext: () => ({
@@ -67,7 +70,10 @@ vi.mock('@logger', () => ({
 }))
 
 vi.mock('@renderer/data/hooks/useCache', () => ({
-  usePersistCache: () => [pinnedTabsValue, setPinnedTabsMock]
+  usePersistCache: (key: string) =>
+    key === 'ui.tab.last_active_module_url'
+      ? [lastActiveModuleUrlValue, setLastActiveModuleUrlMock]
+      : [pinnedTabsValue, setPinnedTabsMock]
 }))
 
 vi.mock('react-i18next', async (importOriginal) => {
@@ -251,9 +257,24 @@ function PinnedTabMaterializer() {
   return <div data-testid="detached-pinned">{String(tabs.find((tab) => tab.id === 'detached')?.isPinned)}</div>
 }
 
+// Switches the fixed home tab to another url once, the way the sidebar switches modules in place.
+function ModuleSwitcher({ url }: { url: string }) {
+  const { updateTab } = useTabsContext()
+  const didSwitchRef = useRef(false)
+
+  useEffect(() => {
+    if (didSwitchRef.current) return
+    didSwitchRef.current = true
+    updateTab('home', { url })
+  }, [updateTab, url])
+
+  return <TabSnapshot />
+}
+
 beforeEach(() => {
   currentLanguage = 'en'
   pinnedTabsValue = [PINNED_FILES_TAB]
+  lastActiveModuleUrlValue = null
 })
 
 afterEach(() => {
@@ -599,6 +620,87 @@ describe('TabsProvider', () => {
     const ids = (screen.getByTestId('tab-ids').textContent ?? '').split(',')
     expect(ids).toHaveLength(2)
     expect(new Set(ids).size).toBe(2)
+  })
+})
+
+describe('last-active module memory', () => {
+  it('reopens the recorded module on the default tab', () => {
+    lastActiveModuleUrlValue = '/app/agents'
+
+    render(
+      <TabsProvider>
+        <TabSnapshot />
+      </TabsProvider>
+    )
+
+    expect(screen.getByTestId('tab-urls')).toHaveTextContent('/app/agents')
+  })
+
+  it('never overrides an explicitly passed initialDefaultTab', () => {
+    lastActiveModuleUrlValue = '/app/agents'
+
+    render(
+      <TabsProvider
+        initialDefaultTab={{
+          id: 'home',
+          type: 'route',
+          url: '/app/translate',
+          title: '',
+          lastAccessTime: 0,
+          isDormant: false
+        }}>
+        <TabSnapshot />
+      </TabsProvider>
+    )
+
+    expect(screen.getByTestId('tab-urls')).toHaveTextContent('/app/translate')
+    expect(screen.getByTestId('tab-urls')).not.toHaveTextContent('/app/agents')
+  })
+
+  it('falls back to the chat default when the recorded route no longer resolves to a module', () => {
+    lastActiveModuleUrlValue = '/app/library'
+
+    render(
+      <TabsProvider>
+        <TabSnapshot />
+      </TabsProvider>
+    )
+
+    expect(screen.getByTestId('tab-urls')).toHaveTextContent('/app/chat')
+  })
+
+  it('records the module base route when the active tab switches modules', async () => {
+    render(
+      <TabsProvider>
+        <ModuleSwitcher url="/app/agents?sessionId=s1" />
+      </TabsProvider>
+    )
+
+    await waitFor(() => expect(setLastActiveModuleUrlMock).toHaveBeenCalledWith('/app/agents'))
+  })
+
+  it('leaves the recorded module untouched on non-module routes', async () => {
+    lastActiveModuleUrlValue = '/app/agents'
+
+    render(
+      <TabsProvider>
+        <ModuleSwitcher url="/settings/provider" />
+      </TabsProvider>
+    )
+
+    await waitFor(() => expect(screen.getByTestId('tab-urls')).toHaveTextContent('/settings/provider'))
+    expect(setLastActiveModuleUrlMock).not.toHaveBeenCalled()
+  })
+
+  it('never records from a sub-window', async () => {
+    render(
+      <TabsProvider initialDefaultTab={null} includePinnedTabs={false}>
+        <PinnedTabMaterializer />
+      </TabsProvider>
+    )
+
+    await waitFor(() => expect(screen.getByTestId('detached-pinned')).toHaveTextContent('true'))
+    expect(setLastActiveModuleUrlMock).not.toHaveBeenCalled()
   })
 })
 

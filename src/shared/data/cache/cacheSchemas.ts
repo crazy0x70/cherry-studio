@@ -308,6 +308,9 @@ export const DefaultSharedCache: SharedCacheSchema = {
  */
 export type RendererPersistCacheSchema = {
   'ui.tab.pinned_tabs': CacheValueTypes.Tab[]
+  // Base route of the sidebar module last active in the main window (e.g. '/app/agents'),
+  // so a restart reopens the module the user left off in. Null = never recorded.
+  'ui.tab.last_active_module_url': string | null
   'ui.global_search.recent_items': CacheValueTypes.GlobalSearchRecentEntry[]
   'ui.sidebar.docked_tabs': CacheValueTypes.Tab[]
   'ui.sidebar.width': number
@@ -346,6 +349,7 @@ export type RendererPersistCacheSchema = {
 
 export const DefaultRendererPersistCache: RendererPersistCacheSchema = {
   'ui.tab.pinned_tabs': [],
+  'ui.tab.last_active_module_url': null,
   'ui.global_search.recent_items': [],
   'ui.sidebar.docked_tabs': [],
   'ui.sidebar.width': 50, // keep in sync with SIDEBAR_ICON_WIDTH (renderer Sidebar/constants.ts)
