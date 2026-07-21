@@ -294,6 +294,7 @@ function AgentEditDialogContent({
   const persist = async () => {
     const pending = saveIntent
     if (!pending) return
+    const savedSkillIds = [...values.skillIds]
 
     form.clearErrors('root')
     saveFailedRef.current = false
@@ -308,6 +309,7 @@ function AgentEditDialogContent({
       return
     }
 
+    setBaselineSkillIds(savedSkillIds)
     try {
       await onSaved(updated)
     } catch (error) {
