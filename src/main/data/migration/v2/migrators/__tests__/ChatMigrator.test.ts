@@ -1032,6 +1032,45 @@ describe('ChatMigrator.insertStagedTopics chat_message_file_ref backfill', () =>
     expect(rows.filter((r) => r.role !== 'root').some((r) => r.parentId === null)).toBe(false)
   })
 
+  it('remaps a topic activeNodeId that collides with a deduped message id (no dangling active node)', async () => {
+    const migrator = new ChatMigrator()
+    // Two topics share message id 'dup'. Within the batch, t1's 'dup' is seen first, so t2's
+    // 'dup' is reassigned a fresh id. t2's activeNodeId points at 'dup' and must follow the
+    // rename — otherwise it dangles (and 'dup' now belongs to t1, not t2).
+    stage(
+      migrator,
+      [
+        {
+          topic: newTopic('t1', 100),
+          messages: [newMessage('dup', 't1', [{ type: 'main_text', content: 'a' }])],
+          pinned: false
+        },
+        {
+          topic: { ...newTopic('t2', 100), activeNodeId: 'dup' },
+          messages: [newMessage('dup', 't2', [{ type: 'main_text', content: 'b' }])],
+          pinned: false
+        }
+      ],
+      []
+    )
+
+    const fn = (migrator as unknown as Record<string, unknown>)['insertStagedTopics'] as (
+      ctx: MigrationContext
+    ) => Promise<unknown>
+    await fn.call(migrator, ctxOf())
+
+    const [t2] = await dbh.db.select().from(topicTable).where(eq(topicTable.id, 't2'))
+    const t2Content = (await dbh.db.select().from(messageTable).where(eq(messageTable.topicId, 't2'))).filter(
+      (r) => r.role !== 'root'
+    )
+
+    // t2 kept its one content message under a fresh (deduped) id, and activeNodeId followed the
+    // rename to that live t2 message instead of dangling at 'dup'.
+    expect(t2Content).toHaveLength(1)
+    expect(t2Content[0].id).not.toBe('dup')
+    expect(t2.activeNodeId).toBe(t2Content[0].id)
+  })
+
   it('skips chat_message_file_ref for dangling fileId and records warning', async () => {
     const migrator = new ChatMigrator()
     const messages = [newMessage('m-dangle', 't-dangle', [{ type: 'image', fileId: 'nonexistent-fe' }])]

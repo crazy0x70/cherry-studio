@@ -1146,6 +1146,15 @@ export class ChatMigrator extends BaseMigrator {
             msg.parentId = idRemap.get(msg.parentId)!
           }
         }
+        // A deduped id can also be a topic's activeNodeId — re-point it too, or the active
+        // node dangles at the old (now-reassigned) id. activeNodeId is not an FK, so
+        // foreign_key_check won't catch it; the topic would silently open to "message not found".
+        for (const data of batch) {
+          const active = data.topic.activeNodeId
+          if (active && idRemap.has(active)) {
+            data.topic.activeNodeId = idRemap.get(active)!
+          }
+        }
       }
       const droppedRefs = this.sanitizeMessageModelReferences(batchMessages)
       if (droppedRefs > 0) logger.info(`Filtered ${droppedRefs} dangling message model references`)
